@@ -1,0 +1,10 @@
+{
+ "name": "SIMMS",
+ "logo": null,
+ "colors": {"bg": ["#1e2234", "#5c213e"], "accent": "#c8104a", "text": "#ffffff",
+            "muted": "#c9cbd6", "caption_bg": "#11131c", "caption_text": "#ffffff"},
+ "intro": {"enabled": true, "dur": 3.0},
+ "outro": {"enabled": true, "dur": 3.0, "title": "Thanks for watching", "lines": [], "url": ""},
+ "captions": {"burn": true, "size": 34, "max_chars": 72},
+ "sfx": {"click": -27, "whoosh": -31, "type": -37}
+}

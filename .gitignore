@@ -1,0 +1,11 @@
+# per-person workspace lives in ~/VideoStudio; never commit envs, models, videos or projects
+.venv/
+bin/
+models/
+projects/
+__pycache__/
+*.pyc
+*.mp4
+*.mov
+*.wav
+.DS_Store

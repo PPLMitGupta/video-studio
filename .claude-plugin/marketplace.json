@@ -1,0 +1,12 @@
+{
+  "name": "video-studio",
+  "description": "PlayPower Labs video tooling for product demos and walkthroughs",
+  "owner": { "name": "Mit Gupta" },
+  "plugins": [
+    {
+      "name": "video-studio",
+      "source": "./",
+      "description": "polish-recording (screen recording -> professional video) and walkthrough-video (narrated app walkthrough from scratch)"
+    }
+  ]
+}
