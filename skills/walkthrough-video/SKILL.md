@@ -110,6 +110,10 @@ Rules that each came from a failed take:
   retry once. Add a final check of the story's end state and `note()` it if it's missing.
 - **Switch roles by loading the other page first**, then call `camera()`. The cut cross-fades.
 - **Keep known bugs off camera**, and don't stop on a screen that shows one.
+- **Watch for popups wider than the page.** If a dropdown or popover runs past the right edge,
+  typing into it scrolls the whole page sideways and the label column slides off screen (no camera
+  setting can bring it back). Record at a wider layout (`layout: { width: 1600, height: 900 }`) or
+  report the overflow as an app bug and avoid typing into that popup on camera.
 
 Run it from the app repo so Playwright resolves: `cd <repo> && node <project>/work/scenes.mjs`. A
 take lasts about 10 minutes and changes data, so run it in the background. It prints problems

@@ -94,7 +94,10 @@ def targets(ev, end, SW, SH, opt):
             keys.append((m["t0"], *cur, m["t1"])); last_focus_t = m["t1"]
             continue  # already framed: hold still rather than drift
         z, cx, cy = focus(u)
-        if z < ZMIN:
+        # content running into the edge of the screen (a popup wider than the page, a full-width
+        # row) continues off-screen: zooming in would cut it, so stay as wide as now
+        at_edge = u["x"] <= 0.01 * SW or u["x"] + u["width"] >= 0.99 * SW
+        if z < ZMIN or at_edge:
             if cur is not None:            # the next thing needs the full view: ease back out
                 keys.append((m["t0"], 1.0, SW / 2, SH / 2, m["t1"])); cur = None
             continue
