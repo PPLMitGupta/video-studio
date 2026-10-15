@@ -87,8 +87,13 @@ One row per line: `<start s in the ORIGINAL video>\t<narration>[\t<step title>]`
   - Brand order: defaults < the plugin's `brand.json` (team) < `~/VideoStudio/brand.json` (personal) < project.
     If no logo is set yet, ask the user for a PNG and the end-card lines/URL. Team-wide changes go in
     the repo's `brand.json` (and `assets/`) through a pull request; otherwise save them in `~/VideoStudio/brand.json`.
-- **`polish`:** tuning. `zmax` (1.5, the strongest zoom), `hold` (3 s before zooming out),
-  `auto_hold` (true), `ripples` (true).
+- **`polish`:** tuning.
+  - `zoom`: `"auto"` (default), `"gentle"` (at most 1.25x) or `"off"`. The camera frames the whole card or
+    panel an action sits in (read from the frame), so labels next to a control stay in view; on a
+    full-width page it stays wide. Use `"gentle"` or `"off"` for dense mapping or table screens if the
+    review sheet still shows anything cut off.
+  - `zmax` (1.5, the strongest zoom), `zmin` (1.2; smaller zooms are skipped), `hold` (3 s before
+    zooming out), `auto_hold` (true), `ripples` (true).
 
 ## 4. One review round with the user (required)
 
@@ -119,7 +124,9 @@ combined review.
   - Loudness must be within 1 LUFS of the target.
   - No captions may fall outside the voice.
 - **Read `work/frames/effects_check.jpg`:** the intro card, each step title, each cut, ripples on the
-  actual click points, the spotlight, holds and the outro.
+  actual click points, the spotlight, holds, the outro, and the tightest zooms. In every zoomed
+  frame, check that nothing important is cut off: the label column, the left side of a table,
+  totals, the edges of a dialog. If something is, set `"zoom": "gentle"` (or `"off"`) and rebuild.
 - **Read `work/frames/sync_check.jpg`:** each frame matches its line.
 - **Send** `output/<name>.mp4` (and its `.srt`) with SendUserFile.
 - **Report:** old -> new length, mode, cuts and speed-ups, holds, anything guessed, and anything

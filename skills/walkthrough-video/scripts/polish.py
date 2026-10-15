@@ -12,7 +12,9 @@ so build.py's speed-ups and narration placement still apply unchanged.
 usage: polish.py <project> [--start S --dur D --out FILE]   (start/dur: a preview range in raw seconds)
 
 Tuning lives in project.json "polish" (all optional):
+  zoom "auto"         "auto", "gentle" (at most 1.25x) or "off"
   zmax 1.5            strongest zoom; above ~1.6 viewers lose their place
+  zmin 1.2            smaller zooms are skipped (they only add motion)
   content_center .61  where the main content column sits, as a fraction of the width; the camera
                       leans toward it so a form isn't cut off when the target is near its left edge
   hold 3.0            seconds to stay zoomed after the last action before easing back out
@@ -45,90 +47,10 @@ def load(work):
 
 
 # ---------------------------------------------------------------- camera director
-def targets(c, end, SW, SH, opt):
-    """Piecewise camera targets (t, zoom, cx, cy) in source pixels, from the action log."""
-    ZMAX, PREF, HOLD = opt["zmax"], opt["content_center"], opt["hold"]
-    ev = c["events"]
-    keys = [(0.0, 1.0, SW / 2, SH / 2)]
-
-    def focus(box):
-        x, y, w, h = box["x"], box["y"], box["width"], box["height"]
-        need_w = max(w + 0.14 * SW, SW / ZMAX)
-        need_h = max(h + 0.16 * SH, SH / ZMAX)
-        z = max(1.0, min(ZMAX, SW / need_w, SH / need_h))
-        vw = SW / z
-        lo, hi = (x + w) - vw / 2 + 0.05 * vw, x + vw / 2 - 0.05 * vw
-        cx = min(max(PREF * SW, lo), hi) if lo <= hi else x + w / 2
-        return z, cx, y + h / 2
-
-    def inside(box, cur):
-        if cur is None:
-            return False
-        z, cx, cy = cur
-        vw, vh = SW / z, SH / z
-        return (box["x"] >= cx - vw * .46 and box["y"] >= cy - vh * .44 and
-                box["x"] + box["width"] <= cx + vw * .46 and box["y"] + box["height"] <= cy + vh * .44)
-
-    on_card, last_focus_t, cur, last_nav = True, -9, None, -9
-    for e in ev:
-        t = e["t"]
-        if e["k"] == "cut":
-            on_card = bool(e.get("card"))
-            keys.append((t, 1.0, SW / 2, SH / 2)); cur = None
-            continue
-        if on_card:
-            continue
-        if e["k"] in ("nav", "scroll", "pre"):
-            keys.append((t, 1.0, SW / 2, SH / 2)); cur = None
-            if e["k"] == "nav":
-                last_nav = t
-            continue
-        if not e.get("box"):
-            continue
-        if e["k"] in ("move", "click") and t - last_nav < 1.9:
-            continue  # the click that opens the next page: stay wide while it loads
-        if inside(e["box"], cur):
-            keys.append((t, *cur)); last_focus_t = t
-            continue  # already framed: hold still rather than drift
-        z, cx, cy = focus(e["box"])
-        if z < 1.12:
-            continue  # a wide element reads fine without zooming
-        lead = 0.3 if t - last_focus_t > 1.5 else 0.0
-        keys.append((max(0.0, t - lead), z, cx, cy))
-        cur, last_focus_t = (z, cx, cy), t
-    keys.sort(key=lambda k: k[0])
-
-    out = []
-    for i, k in enumerate(keys):
-        if out and out[-1][1:] == k[1:]:
-            continue
-        out.append(k)
-        nxt = keys[i + 1][0] if i + 1 < len(keys) else end
-        if k[1] > 1.0 and nxt - k[0] > HOLD + 0.8:
-            out.append((k[0] + HOLD, 1.0, SW / 2, SH / 2))
-    return out
-
-
-def camera_path(keys, n, SW, SH):
-    """Sample targets per frame, then smooth with a critically damped spring (no jerks, no overshoot)."""
-    tz = np.ones(n); tx = np.full(n, SW / 2); ty = np.full(n, SH / 2)
-    j = 0
-    for i in range(n):
-        t = i / FPS
-        while j + 1 < len(keys) and keys[j + 1][0] <= t:
-            j += 1
-        _, tz[i], tx[i], ty[i] = keys[j]
-
-    def spring(target, w):
-        x, v, out, dt = target[0], 0.0, np.empty_like(target), 1 / FPS
-        for i, g in enumerate(target):
-            v += (w * w * (g - x) - 2 * w * v) * dt; x += v * dt; out[i] = x
-        return out
-
-    z = np.exp(spring(np.log(tz), 4.2))
-    x, y = spring(tx, 4.6), spring(ty, 4.6)
-    vw, vh = SW / z, SH / z
-    return z, np.clip(x, vw / 2, SW - vw / 2), np.clip(y, vh / 2, SH - vh / 2)
+# Shared with polish-recording (tools/render.py): frames each target together with the content on
+# its row (tools/context.py), groups quick actions into one move, and skips pointless small zooms.
+from render import camera_path, targets  # noqa: E402
+import context  # noqa: E402
 
 
 # ---------------------------------------------------------------- static layers
@@ -176,12 +98,18 @@ def main():
     a = ap.parse_args()
     proj = project(a.project); work = proj / "work"
     cfg = load_config(proj)
-    opt = {"zmax": 1.5, "content_center": 0.61, "hold": 3.0, "bg": ["#1e2234", "#5c213e"], "pill_dot": "#e8476e"}
+    opt = {"zoom": "auto", "zmax": 1.5, "zmin": 1.2, "settle": 1.9, "content_center": 0.61, "hold": 3.0,
+           "bg": ["#1e2234", "#5c213e"], "pill_dot": "#e8476e"}
     opt.update(cfg.get("polish", {}))
     c, frames, end = load(work)
     SW, SH = Image.open(frames[0][1]).size
     n = int(end * FPS)
-    z, cx, cy = camera_path(targets(c, end, SW, SH, opt), n, SW, SH)
+    if opt["zoom"] != "off" and c.get("ctx_version") != context.VERSION:
+        print("reading the screen around each action (context-aware zoom)...")
+        context.add(work / "recording.mp4", c["events"], (SW, SH))
+        c["ctx_version"] = context.VERSION
+        (work / "cues.json").write_text(json.dumps(c, indent=1))
+    z, cx, cy = camera_path(targets(c["events"], end, SW, SH, opt), n, SW, SH)
     bg, mask = base_layers(opt["bg"])
     cuts = [e["t"] for e in c["events"] if e["k"] == "cut" and not e.get("first")]
     chapters = [(q["t"], pill(cfg["chapters"][q["id"]], opt["pill_dot"])) for q in c["cues"] if q["id"] in cfg.get("chapters", {})]
@@ -204,10 +132,12 @@ def main():
         win = src.resize((WIN_W, WIN_H), Image.LANCZOS if z[i] > 1.01 else Image.BILINEAR, box=box)
         out = bg.copy(); out.paste(win, (WIN_X, WIN_Y), mask)
         for ct, p in chapters:
-            if ct - 0.2 <= t <= ct + 3.6:
-                k = max(0.0, min(1.0, (t - ct + 0.2) / 0.35, (ct + 3.6 - t) / 0.4))
+            # lower-left corner of the window (over the app's sidebar footer), not the middle of
+            # the page where it covered the rows being talked about
+            if ct - 0.2 <= t <= ct + 3.2:
+                k = max(0.0, min(1.0, (t - ct + 0.2) / 0.35, (ct + 3.2 - t) / 0.4))
                 layer = p.copy(); layer.putalpha(layer.getchannel("A").point(lambda v: int(v * k)))
-                out.paste(layer, (OW // 2 - p.width // 2, WIN_Y + WIN_H - 92 + int((1 - k) * 14)), layer)
+                out.paste(layer, (WIN_X + 24 - int((1 - k) * 14), WIN_Y + WIN_H - p.height - 24), layer)
         if prev is not None and any(0 <= t - ct < 1 / FPS for ct in cuts):
             xf_from, xf_t = prev, t
         if xf_from is not None and t - xf_t < 0.45:

@@ -19,9 +19,22 @@ MAX_DECODE_W = 2560   # enough for a crisp 1.5x zoom in a 1664 px window
 
 # ---------------------------------------------------------------- camera director
 def targets(ev, end, SW, SH, opt):
-    """Piecewise camera targets (t, zoom, cx, cy) in content pixels, from events on the output timeline."""
-    ZMAX, PREF, HOLD = opt["zmax"], opt["content_center"], opt["hold"]
-    keys = [(0.0, 1.0, SW / 2, SH / 2)]
+    """Piecewise camera targets (t, zoom, cx, cy) in content pixels, from events on the output timeline.
+
+    Zoom only where it helps, and never at the cost of context:
+      - frame each event's "ctx" box (the change plus what belongs with it on its row, from
+        context.py) rather than the bare change, so a dropdown keeps its label in view
+      - changes less than 1.5 s apart are one moment: frame them together, move once
+      - skip zooms below zmin (a small zoom is just motion); stay wide after page changes
+      - opt["zoom"]: "auto" (default), "gentle" (at most 1.25x) or "off"
+    """
+    mode = opt.get("zoom", "auto")
+    wide = (0.0, 1.0, SW / 2, SH / 2)
+    if mode == "off":
+        return [wide]
+    ZMAX = min(opt["zmax"], 1.25) if mode == "gentle" else opt["zmax"]
+    ZMIN, PREF, HOLD = opt.get("zmin", 1.2), opt["content_center"], opt["hold"]
+    keys = [wide + (0.0,)]                 # (t, z, cx, cy, active until)
 
     def focus(box):
         x, y, w, h = box["x"], box["y"], box["width"], box["height"]
@@ -41,36 +54,64 @@ def targets(ev, end, SW, SH, opt):
         return (box["x"] >= cx - vw * .46 and box["y"] >= cy - vh * .44 and
                 box["x"] + box["width"] <= cx + vw * .46 and box["y"] + box["height"] <= cy + vh * .44)
 
-    last_focus_t, cur, last_nav = -9, None, -9
+    def union(boxes):
+        x0 = min(b["x"] for b in boxes); y0 = min(b["y"] for b in boxes)
+        x1 = max(b["x"] + b["width"] for b in boxes); y1 = max(b["y"] + b["height"] for b in boxes)
+        return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+
+    # 1. group events into moments: boxed events less than 1.5 s apart, with no page change between.
+    #    Works for both pipelines: polish-recording (click/change/type from pixels) and
+    #    walkthrough-video (move/click/spot/type from the recorder's log, cuts to title cards, "pre").
+    settle = opt.get("settle", 1.2)          # seconds to stay wide after a page change
+    moments, last_nav, on_card = [], -9, False
     for e in ev:
         t = e["t"]
-        if e["k"] in ("nav", "scroll", "cut"):
-            keys.append((t, 1.0, SW / 2, SH / 2)); cur = None
+        if e["k"] in ("nav", "scroll", "cut", "pre"):
+            keys.append((t, 1.0, SW / 2, SH / 2, t))
+            moments.append(None)
+            if e["k"] == "cut":
+                on_card = bool(e.get("card"))
             if e["k"] != "scroll":
                 last_nav = t
             continue
-        if not e.get("box"):
+        b = e.get("ctx") or e.get("box")
+        if on_card or not b or (e["k"] in ("click", "change", "move") and t - last_nav < settle):
+            continue  # a title card, nothing to frame, or the page is still loading: stay wide
+        m = moments[-1] if moments else None
+        if m is not None and t - m["t1"] < 1.5:
+            m["t1"] = t; m["boxes"].append(b)
+        else:
+            moments.append({"t0": t, "t1": t, "boxes": [b]})
+
+    # 2. one framing per moment
+    cur, last_focus_t = None, -9
+    for m in moments:
+        if m is None:
+            cur = None
             continue
-        if e["k"] in ("click", "change") and t - last_nav < 1.2:
-            continue  # the page is still loading: stay wide
-        if inside(e["box"], cur):
-            keys.append((t, *cur)); last_focus_t = t
+        u = union(m["boxes"])
+        if inside(u, cur):
+            keys.append((m["t0"], *cur, m["t1"])); last_focus_t = m["t1"]
             continue  # already framed: hold still rather than drift
-        z, cx, cy = focus(e["box"])
-        if z < 1.12:
-            continue  # a wide element reads fine without zooming
-        lead = 0.3 if t - last_focus_t > 1.5 else 0.0
-        keys.append((max(0.0, t - lead), z, cx, cy))
-        cur, last_focus_t = (z, cx, cy), t
+        z, cx, cy = focus(u)
+        if z < ZMIN:
+            if cur is not None:            # the next thing needs the full view: ease back out
+                keys.append((m["t0"], 1.0, SW / 2, SH / 2, m["t1"])); cur = None
+            continue
+        lead = 0.3 if m["t0"] - last_focus_t > 1.5 else 0.0
+        keys.append((max(0.0, m["t0"] - lead), z, cx, cy, m["t1"]))
+        cur, last_focus_t = (z, cx, cy), m["t1"]
+
+    # 3. zoom back out HOLD seconds after the last activity in a framing
     keys.sort(key=lambda k: k[0])
     out = []
     for i, k in enumerate(keys):
-        if out and out[-1][1:] == k[1:]:
+        if out and out[-1][1:] == k[1:4]:
             continue
-        out.append(k)
+        out.append(k[:4])
         nxt = keys[i + 1][0] if i + 1 < len(keys) else end
-        if k[1] > 1.0 and nxt - k[0] > HOLD + 0.8:
-            out.append((k[0] + HOLD, 1.0, SW / 2, SH / 2))
+        if k[1] > 1.0 and nxt - k[4] > HOLD + 0.8:
+            out.append((k[4] + HOLD, 1.0, SW / 2, SH / 2))
     return out
 
 
@@ -187,9 +228,10 @@ class Render:
                 out["x"], out["y"] = (e["x"] - cx) * s, (e["y"] - cy) * s
             if "r" in e:
                 out["r"] = e["r"] * s
-            if e.get("box"):
-                b = e["box"]
-                out["box"] = {"x": (b["x"] - cx) * s, "y": (b["y"] - cy) * s, "width": b["width"] * s, "height": b["height"] * s}
+            for k in ("box", "ctx"):
+                if e.get(k):
+                    b = e[k]
+                    out[k] = {"x": (b["x"] - cx) * s, "y": (b["y"] - cy) * s, "width": b["width"] * s, "height": b["height"] * s}
             return out
 
         live = [e for e in events if not tl.in_cut(e["t"]) and e["t"] < tl.src_dur]

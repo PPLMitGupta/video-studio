@@ -61,12 +61,16 @@ def polished_checks(cfg, work, out, placements):
     shots += [(tl.map(e["t"]) + 0.15, "click ripple") for e in ev if e["k"] == "click" and not tl.in_cut(e["t"])][:8]
     shots += [(tl.map(s["t"]) + 1.0, "spotlight") for s in cfg.get("spotlights", [])]
     shots += [(tl.map(th) + d / 2, f"hold {d:.1f}s") for th, d in tl.holds][:4]
+    zp = work / "zooms.json"
+    if zp.exists():          # the tightest zooms: check nothing important (labels, totals) is cut off
+        zooms = sorted(json.loads(zp.read_text()), key=lambda m: -m["z"])[:6]
+        shots += [(m["t"], f"zoom {m['z']}x: is the context in view?") for m in zooms]
     if tl.outro:
         shots.append((tl.out_dur - tl.outro * 0.4, "outro card"))
     frames = work / "frames"
     from PIL import Image, ImageDraw
     w, h = 640, 360
-    shots = sorted(shots)[:24]
+    shots = sorted(shots)[:28]
     sheet = Image.new("RGB", (4 * w, ((len(shots) + 3) // 4) * h), (20, 20, 20))
     for i, (t, label) in enumerate(shots):
         raw = subprocess.run([ffmpeg(), "-v", "error", "-ss", f"{max(t, 0):.2f}", "-i", str(out), "-frames:v", "1",

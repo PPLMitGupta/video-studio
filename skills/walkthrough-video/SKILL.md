@@ -55,9 +55,14 @@ Create `project.json`:
 
 ```json
 { "source": "<abs path>/work/recording_polished.mp4", "output": "output/<name>.mp4",
-  "voice": "am_michael", "speedups": [],
+  "voice": "am_michael", "speedups": [], "pipeline": "walkthrough-video",
   "chapters": { "roles": "Overview", "prof1": "Part 1  ·  IT team setup" } }
 ```
+
+`"pipeline": "walkthrough-video"` keeps `build.py` to voice + speed-ups. The source is already
+framed and zoomed by `polish.py`; polish-recording's render on top of it zooms a second time with
+click positions that no longer match (crops, restless camera, ripples in empty space, a slug title
+card). Never add polish-recording settings to these projects.
 
 Then voice every line with `"$PY" "$S/tts_prep.py" <project>`. This writes `work/durations.json` and
 fills build.py's voice cache.
@@ -79,8 +84,20 @@ await r.finish();
 ```
 
 The hands are `point`, `spot` (highlight ring), `click`, `type` (`{clear}`), `tabOut`, `pick`
-(dropdown button name plus option), `scrollTo` (layout px), `navClick`, `goto`, and `settle`.
-Every one logs what it did, and the zoom is directed from that log.
+(dropdown button name plus option), `scrollTo` (layout px), `navClick`, `goto`, `settle` and `quiet`.
+Every one logs what it did, and the zoom is directed from that log. `at(fraction)` waits until that
+share of the current line has been spoken.
+
+- **Act on the words.** An action the line names near its end waits for them:
+  `await r.at(0.7); await click(page, accept)` for "…and we accept them". Actions that run at the
+  start of a line while the voice names them at the end read as the video running ahead.
+- **Spot what the line is about, when it is about it.** A ring stays until its line has been spoken
+  (one ring at a time, kept inside the screen, gone when its element goes). Put `spot` in the cue
+  whose line names the element, after any scroll in that cue.
+- **Loading.** `settle` and `spot` wait until the page stops changing and no skeleton, spinner or
+  `aria-busy` element is left, so loading placeholders stay off camera. Page changes still belong in `pre`.
+- The role badge shows for 4 s when the camera cuts to a role, then fades (left on screen it floats
+  over the page once it scrolls).
 
 Rules that each came from a failed take:
 
@@ -100,10 +117,13 @@ and lines that were never cued.
 
 ## 4. Check the take before polishing
 
-1. Run `"$PY" "$S/check_grid.py" <project>` and read every `work/check/grid*.jpg`. Each frame (three
+1. Run `"$PY" "$S/check_spots.py" <project>`. It flags every highlight ring whose content moved while
+   it was showing (the page was still scrolling or shifting), which leaves the ring around empty space.
+   Fix each one in the scene (wait for the page, spot after the scroll) or reword the line, then retake.
+2. Run `"$PY" "$S/check_grid.py" <project>` and read every `work/check/grid*.jpg`. Each frame (three
    quarters through its line) must show what the line says. Look for pages still loading,
    missing highlights, error banners and wrong values.
-2. Fix what you find. For a pacing problem, move work into `pre`. For a missing element, reword
+3. Fix what you find. For a pacing problem, move work into `pre`. For a missing element, reword
    the line or fix the locator. If the data changed, the next take needs a reset (ask first). For
    a reworded line, edit `lines.json`, rerun `tts_prep.py`, rebuild `script.tsv` from
    `work/cues.json`, and check that no speed-up now starts inside the longer line.
@@ -113,11 +133,16 @@ and lines that were never cued.
 Preview 40 seconds first with `"$PY" "$S/polish.py" <project> --start <s> --dur 40 --out work/preview.mp4`.
 Pull frames from it and check the zoom:
 
-- the target and its whole form stay in view
-- no zoom while a page loads
+- the camera frames the whole card or panel the action is in, never part of it: on mapping and
+  form screens the label column (the values from the file) must stay in view next to the controls
+- no zoom while a page loads, and no zooming in and out on every action
 - no restless drifting
 
-The tuning options are in `polish.py`'s docstring (`zmax`, `content_center`, `hold`, colours).
+The camera is shared with polish-recording (`tools/render.py` + `tools/context.py`): before
+framing a target it reads the frame and widens the target to its whole card (between panel
+borders), groups actions less than 1.5 s apart into one move, and skips zooms under 1.2x. On a
+full-width page card it stays wide. Tuning in project.json `"polish"`: `"zoom": "auto" | "gentle" |
+"off"`, `zmax`, `zmin`, `content_center`, `hold`, colours.
 Then render the whole thing with `"$PY" "$S/polish.py" <project>`, about 0.6× real time.
 
 Then do polish-recording's review round, in one message, and wait for "go":
@@ -152,9 +177,13 @@ on screen, and the state the app's data was left in.
 - **The pointer, ring and role badge are page elements** mounted on `<html>` after `load`,
   outside React's `<body>` and outside the zoom. Mounting them earlier breaks hydration, and the
   app never renders.
-- **The zoom is directed from the action log, not guessed from pixels.** It frames each target
-  with margin, leans toward the content column so a form isn't cut off, holds still when the next
-  target is already in frame, stays wide for navigation clicks and page loads, and eases through
-  a critically damped spring.
+- **The zoom is directed from the action log, plus a look at the frame.** The log says where the
+  action is; the frame says which card it belongs to, so the camera frames the whole card. It holds
+  still when the next target is already in frame, stays wide for navigation clicks and page loads,
+  and eases through a critically damped spring.
+- **Measure only once the page is still.** `center()` waits until the element's box stops moving
+  (smooth scrolls run longer than any fixed sleep), `scrollTo()` waits until the page stops
+  scrolling, and the highlight ring follows its element every frame. A box measured mid-scroll
+  puts both the camera and the ring on empty space.
 - **`project.json` `source` must be an absolute path.** `build.py` resolves it from its own
   working folder.

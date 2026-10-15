@@ -141,6 +141,7 @@ def main():
         cfg.setdefault("cuts", [])
         cfg.setdefault("spotlights", [])
         cfg["mode"] = mode
+        cfg["pipeline"] = "polish-recording"
     cfg.setdefault("output", f"output/{proj.name}_voiceover.mp4")
     cfg["speedups"] = speedups
     cfg_path.write_text(json.dumps(cfg, indent=1))

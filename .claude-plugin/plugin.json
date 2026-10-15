@@ -1,6 +1,6 @@
 {
   "name": "video-studio",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Turn screen recordings into polished product videos (AI voiceover, auto-zoom, captions, step titles, intro/outro cards), or record a narrated app walkthrough from scratch. Runs locally on Apple Silicon Macs.",
   "author": { "name": "Mit Gupta" }
 }

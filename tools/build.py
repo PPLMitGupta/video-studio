@@ -16,8 +16,9 @@ import soundfile as sf
 from common import duration, ffmpeg, fmt, load_config, project_dir
 from timeline import Timeline
 from voice import SR, load_pronunciations, load_script, place_lines
+import context
 
-POLISH = {"zmax": 1.5, "content_center": 0.5, "hold": 3.0, "auto_hold": True, "ripples": True}
+POLISH = {"zoom": "auto", "zmax": 1.5, "zmin": 1.2, "content_center": 0.5, "hold": 3.0, "auto_hold": True, "ripples": True}
 
 
 def check_rows(rows, tl):
@@ -105,6 +106,11 @@ def polished(a, proj, cfg, work, src, src_end, rows):
     # events from analyze.py, sound effects, captions
     cues = json.loads((work / "cues.json").read_text()) if (work / "cues.json").exists() else {"events": [], "size": None}
     events = cues["events"]
+    if events and opt["zoom"] != "off" and cues.get("ctx_version") != context.VERSION:
+        print("reading the screen around each change (context-aware zoom)...")
+        context.add(src, events, cues.get("size") or video_size(src))
+        cues["ctx_version"] = context.VERSION
+        (work / "cues.json").write_text(json.dumps(cues, indent=1))
     import sfx, captions
     from look import window_rect
     clicks = [tl.map(e["t"]) for e in events if e["k"] == "click" and not tl.in_cut(e["t"])] if opt["ripples"] else []
@@ -150,6 +156,19 @@ def polished(a, proj, cfg, work, src, src_end, rows):
     r = Render(src, crop, tl, events, brand, opt, steps, cfg.get("spotlights", []),
                intro_card(brand, title, cfg.get("subtitle")) if intro else None,
                outro_card(brand) if outro else None)
+    # the zoomed-in moments, so verify.py can show them for a context check
+    z = r.cam[0]; zooms, i = [], 0
+    while i < len(z):
+        if z[i] > 1.15:
+            j = i
+            while j < len(z) and z[j] > 1.15:
+                j += 1
+            k = i + int(np.argmax(z[i:j]))
+            zooms.append({"t": round(k / 30, 2), "z": round(float(z[k]), 2), "dur": round((j - i) / 30, 1)})
+            i = j
+        i += 1
+    (work / "zooms.json").write_text(json.dumps(zooms, indent=1))
+    print(f"zoom: {len(zooms)} zoomed moments, {sum(m['dur'] for m in zooms):.0f}s of {out_len:.0f}s zoomed in")
     target = out if not a.preview else out.with_name(out.stem + f"_preview_{int(a.preview[0])}.mp4")
     print(f"rendering {fmt(out_len)} ({r.n} frames) -> {target.name}")
     r.run(target, work / "mix.wav", ass, cwd=work, preview=a.preview)
@@ -181,7 +200,16 @@ def main():
     src = cfg["source"]
     src_end = duration(src)
     rows = load_script(proj)
-    (polished if cfg.get("polish", False) is not False else classic)(a, proj, cfg, work, src, src_end, rows)
+    (polished if is_polish_recording(cfg) else classic)(a, proj, cfg, work, src, src_end, rows)
+
+
+def is_polish_recording(cfg):
+    """Only projects made by polish-recording's prepare.py get the polished render. walkthrough-video
+    projects also have a "polish" block (tuning for its own polish.py) but their source is already
+    framed and zoomed: polishing it again zooms twice, with click positions that no longer match."""
+    if cfg.get("pipeline"):
+        return cfg["pipeline"] == "polish-recording"
+    return cfg.get("polish", False) is not False and cfg.get("mode") in ("voiced", "silent") and "chapters" not in cfg
 
 
 if __name__ == "__main__":
